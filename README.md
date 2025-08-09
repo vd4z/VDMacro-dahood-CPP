@@ -14,9 +14,9 @@ simple macro for dahood. fast, low delay, low cpu. does first person and third p
 
 ### setup / build
 - option 1 (vs 2022):
-  1) open `insidingforfeds_macro.sln`
-  2) set `Release` | `x64`
-  3) press Ctrl+F5 to build and run
+  - open `insidingforfeds_macro.sln`
+  - set `Release` | `x64`
+  - press Ctrl+F5 to build and run
 - option 2 (prebuilt):
   - run `x64/Release/insidingforfeds_macro.exe`
 
