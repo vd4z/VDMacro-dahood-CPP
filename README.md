@@ -56,3 +56,9 @@ simple macro for dahood. fast, low delay, low cpu. does first person and third p
 ### credits
 - roblox: `valkrycx`
 - discord: `insidingforfeds`
+
+
+
+
+## tags
+Da hood, macro, roblox, dahood, da hood macro
