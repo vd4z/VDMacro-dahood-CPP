@@ -24,8 +24,6 @@ struct Settings {
     KeybindType keybindType;
     int keyboardVk;
     MouseButton mouseButton;
-    bool autoEmote;
-    int emoteNumber;
 };
 
 static atomic<bool> macroEnabled{false};
@@ -126,10 +124,8 @@ string toJson(const Settings &s) {
     ss << "  \"mode\": \"" << mode << "\",\n";
     ss << "  \"keybind_type\": \"" << kb << "\",\n";
     ss << "  \"keyboard_vk\": " << s.keyboardVk << ",\n";
-    ss << "  \"mouse_button\": \"" << mb << "\",\n";
-    ss << "  \"auto_emote\": " << (s.autoEmote ? 1 : 0) << ",\n";
-    ss << "  \"emote_number\": " << s.emoteNumber << "\n";
-    ss << "}\n";
+      ss << "  \"mouse_button\": \"" << mb << "\"\n";
+  ss << "}\n";
     return ss.str();
 }
 
@@ -143,10 +139,7 @@ bool loadConfig(Settings &s) {
     if (!parseJsonStringField(t, "keybind_type", kbt)) return false;
     parseJsonIntField(t, "keyboard_vk", vk);
     parseJsonStringField(t, "mouse_button", mb);
-    int autoEmoteInt = 0;
-    int emoteNum = 0;
-    parseJsonIntField(t, "auto_emote", autoEmoteInt);
-    parseJsonIntField(t, "emote_number", emoteNum);
+
     activation = toLowerCopy(activation);
     mode = toLowerCopy(mode);
     kbt = toLowerCopy(kbt);
@@ -160,9 +153,7 @@ bool loadConfig(Settings &s) {
     else if (mb == "middle") s.mouseButton = MouseButton::Middle;
     else if (mb == "x1") s.mouseButton = MouseButton::X1;
     else s.mouseButton = MouseButton::X2;
-    s.autoEmote = autoEmoteInt != 0;
-    if (emoteNum < 1 || emoteNum > 8) emoteNum = 1;
-    s.emoteNumber = emoteNum;
+
     return true;
 }
 
@@ -483,7 +474,7 @@ void drawCenteredUI(const Settings &s, bool running) {
         wstring mode = utf8ToWide(modeToString(s.macroMode));
         wstring act = utf8ToWide(activationToString(s.activationType));
         wstring line = mode + L"  |  " + act;
-        if (s.autoEmote) line += L"  |  auto emote on";
+
         content.push_back(line);
     }
     content.push_back(L"");
@@ -560,17 +551,7 @@ void pressTap(WORD vk) {
     sendScanUp(vk);
 }
 
-void runAutoEmoteThenEnable(int emoteNumber) {
-    const WORD VK_DOT = 0xBE;
-    int n = emoteNumber;
-    if (n < 1) n = 1;
-    if (n > 8) n = 8;
-    pressTap(VK_DOT);
-    sleepMs(50);
-    WORD vkNum = static_cast<WORD>(0x30 + n);
-    pressTap(vkNum);
-    sleepMs(40);
-}
+
 
 void setMacroEnabled(bool enabled) {
     bool previous = macroEnabled.exchange(enabled);
@@ -579,7 +560,7 @@ void setMacroEnabled(bool enabled) {
     }
 }
 
-struct MonitorState { ActivationType act; KeybindType type; int vk; MouseButton mb; bool autoEmote; int emoteNum; };
+struct MonitorState { ActivationType act; KeybindType type; int vk; MouseButton mb; };
 static MonitorState g_monitorState;
 
 void startInputMonitor(const MonitorState &ms) {
@@ -594,32 +575,18 @@ void startInputMonitor(const MonitorState &ms) {
                     if ((wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) && p->vkCode == (DWORD)g_monitorState.vk) {
                         if (g_monitorState.act == ActivationType::Toggle) {
                             if (!pressed) {
-                                bool cur = macroEnabled.load();
-                                if (!cur) {
-                                    if (g_monitorState.autoEmote) {
-                                        thread([]{
-                                            runAutoEmoteThenEnable(g_monitorState.emoteNum);
-                                            setMacroEnabled(true);
-                                        }).detach();
-                                    } else {
-                                        setMacroEnabled(true);
-                                    }
-                                } else {
-                                    setMacroEnabled(false);
-                                }
+                                                                     bool cur = macroEnabled.load();
+                                     if (!cur) {
+                                         setMacroEnabled(true);
+                                     } else {
+                                         setMacroEnabled(false);
+                                     }
                             }
                             pressed = true;
                         } else {
                             if (!pressed) {
                                 g_holdRequest.store(true);
-                                if (g_monitorState.autoEmote) {
-                                    thread([]{
-                                        runAutoEmoteThenEnable(g_monitorState.emoteNum);
-                                        if (g_holdRequest.load()) setMacroEnabled(true);
-                                    }).detach();
-                                } else {
-                                    setMacroEnabled(true);
-                                }
+                                setMacroEnabled(true);
                                 pressed = true;
                             }
                         }
@@ -656,14 +623,7 @@ void startInputMonitor(const MonitorState &ms) {
                                 if (!pressed) {
                                     bool cur = macroEnabled.load();
                                     if (!cur) {
-                                        if (g_monitorState.autoEmote) {
-                                            thread([]{
-                                                runAutoEmoteThenEnable(g_monitorState.emoteNum);
-                                                setMacroEnabled(true);
-                                            }).detach();
-                                        } else {
-                                            setMacroEnabled(true);
-                                        }
+                                        setMacroEnabled(true);
                                     } else {
                                         setMacroEnabled(false);
                                     }
@@ -672,14 +632,7 @@ void startInputMonitor(const MonitorState &ms) {
                             } else {
                                 if (!pressed) {
                                     g_holdRequest.store(true);
-                                    if (g_monitorState.autoEmote) {
-                                        thread([]{
-                                            runAutoEmoteThenEnable(g_monitorState.emoteNum);
-                                            if (g_holdRequest.load()) setMacroEnabled(true);
-                                        }).detach();
-                                    } else {
-                                        setMacroEnabled(true);
-                                    }
+                                    setMacroEnabled(true);
                                     pressed = true;
                                 }
                             }
@@ -725,8 +678,7 @@ int main() {
     printBox(header);
 
     Settings s{};
-    s.autoEmote = false;
-    s.emoteNumber = 1;
+
     bool haveConfig = loadConfig(s);
     if (haveConfig) {
         vector<string> lines = {
@@ -785,30 +737,7 @@ int main() {
                 drawCenteredPanel(conf);
             }
         }
-        {
-            vector<string> lines = {
-                "setup",
-                "auto emote",
-                "automatically emote so you don't have to do the process"
-            };
-            drawCenteredPanel(lines);
-            printCenteredPrompt("Enable auto emote? (y/n): ");
-            string ae; getline(cin, ae); ae = toLowerCopy(ae);
-            if (ae == "y" || ae == "yes") {
-                s.autoEmote = true;
-                while (true) {
-                    vector<string> lines2 = { "setup", "choose emote number", "1 - 8" };
-                    drawCenteredPanel(lines2);
-                    printCenteredPrompt("Emote number: ");
-                    string en; getline(cin, en);
-                    int n = 0;
-                    try { n = stoi(en); } catch (...) { n = 0; }
-                    if (n >= 1 && n <= 8) { s.emoteNumber = n; break; }
-                }
-            } else {
-                s.autoEmote = false;
-            }
-        }
+
         {
             vector<string> lines = { "setup", "save settings for next launch?" };
             drawCenteredPanel(lines);
@@ -821,7 +750,7 @@ int main() {
     thread worker;
     if (s.macroMode == MacroMode::FirstPerson) worker = thread(runFirstPersonLoop); else worker = thread(runThirdPersonLoop);
 
-    MonitorState ms{ s.activationType, s.keybindType, s.keyboardVk, s.mouseButton, s.autoEmote, s.emoteNumber };
+    MonitorState ms{ s.activationType, s.keybindType, s.keyboardVk, s.mouseButton };
     startInputMonitor(ms);
 
     bool last = macroEnabled.load();
