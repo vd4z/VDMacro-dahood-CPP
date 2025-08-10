@@ -24,14 +24,16 @@ struct Settings {
     KeybindType keybindType;
     int keyboardVk;
     MouseButton mouseButton;
+    bool autoEmote;
+    int emoteNumber;
 };
 
 static atomic<bool> macroEnabled{false};
 static atomic<bool> stopThreads{false};
 
-static UINT wheelDeltaUnit = 50;
-static const int kFirstPersonStepDelayMs = 10;
-static const int kThirdPersonKeyTapDelayMs = 5;
+static UINT wheelDeltaUnit = 120;
+static const int kFirstPersonStepDelayMs = 4;
+static const int kThirdPersonKeyTapDelayMs = 10;
 
 string toLowerCopy(const string &s) {
     string r = s;
@@ -124,7 +126,9 @@ string toJson(const Settings &s) {
     ss << "  \"mode\": \"" << mode << "\",\n";
     ss << "  \"keybind_type\": \"" << kb << "\",\n";
     ss << "  \"keyboard_vk\": " << s.keyboardVk << ",\n";
-    ss << "  \"mouse_button\": \"" << mb << "\"\n";
+    ss << "  \"mouse_button\": \"" << mb << "\",\n";
+    ss << "  \"auto_emote\": " << (s.autoEmote ? 1 : 0) << ",\n";
+    ss << "  \"emote_number\": " << s.emoteNumber << "\n";
     ss << "}\n";
     return ss.str();
 }
@@ -139,6 +143,10 @@ bool loadConfig(Settings &s) {
     if (!parseJsonStringField(t, "keybind_type", kbt)) return false;
     parseJsonIntField(t, "keyboard_vk", vk);
     parseJsonStringField(t, "mouse_button", mb);
+    int autoEmoteInt = 0;
+    int emoteNum = 0;
+    parseJsonIntField(t, "auto_emote", autoEmoteInt);
+    parseJsonIntField(t, "emote_number", emoteNum);
     activation = toLowerCopy(activation);
     mode = toLowerCopy(mode);
     kbt = toLowerCopy(kbt);
@@ -152,6 +160,9 @@ bool loadConfig(Settings &s) {
     else if (mb == "middle") s.mouseButton = MouseButton::Middle;
     else if (mb == "x1") s.mouseButton = MouseButton::X1;
     else s.mouseButton = MouseButton::X2;
+    s.autoEmote = autoEmoteInt != 0;
+    if (emoteNum < 1 || emoteNum > 8) emoteNum = 1;
+    s.emoteNumber = emoteNum;
     return true;
 }
 
@@ -317,7 +328,6 @@ void runThirdPersonLoop() {
     bool oDown = false;
     while (!stopThreads.load()) {
         if (macroEnabled.load()) {
-            // hold i
             sendScanDown(VK_I);
             iDown = true;
             sleepMs(kThirdPersonKeyTapDelayMs);
@@ -327,7 +337,6 @@ void runThirdPersonLoop() {
                 continue;
             }
 
-            // hold o
             sendScanDown(VK_O);
             oDown = true;
             sleepMs(kThirdPersonKeyTapDelayMs);
@@ -337,7 +346,6 @@ void runThirdPersonLoop() {
                 continue;
             }
 
-            // release i
             sendScanUp(VK_I);
             iDown = false;
             sleepMs(kThirdPersonKeyTapDelayMs);
@@ -346,7 +354,6 @@ void runThirdPersonLoop() {
                 continue;
             }
 
-            // release o
             sendScanUp(VK_O);
             oDown = false;
             sleepMs(kThirdPersonKeyTapDelayMs);
@@ -392,7 +399,186 @@ void clearConsole() {
     SetConsoleCursorPosition(h, coord);
 }
 
-struct MonitorState { ActivationType act; KeybindType type; int vk; MouseButton mb; };
+static HANDLE statusEvent = nullptr;
+
+struct ConsoleSize { short cols; short rows; };
+
+ConsoleSize getConsoleSize() {
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO csbi{};
+    if (!GetConsoleScreenBufferInfo(h, &csbi)) return {80, 25};
+    short cols = static_cast<short>(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+    short rows = static_cast<short>(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
+    return {cols, rows};
+}
+
+void hideCursor() {
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_CURSOR_INFO ci{};
+    if (GetConsoleCursorInfo(h, &ci)) {
+        ci.bVisible = FALSE;
+        SetConsoleCursorInfo(h, &ci);
+    }
+}
+
+wstring utf8ToWide(const string& s) {
+    if (s.empty()) return L"";
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    wstring ws;
+    ws.resize(len);
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &ws[0], len);
+    return ws;
+}
+
+string formatBindString(const Settings &s) {
+    if (s.keybindType == KeybindType::Keyboard) {
+        stringstream ss; ss << "VK 0x" << hex << uppercase << s.keyboardVk;
+        return ss.str();
+    } else {
+        return string("mouse ") + mouseButtonToString(s.mouseButton);
+    }
+}
+
+static WORD g_defaultAttributes = 0;
+
+void setColor(WORD attr) {
+    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), attr);
+}
+
+void resetColor() {
+    if (g_defaultAttributes) SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), g_defaultAttributes);
+}
+
+WORD colorRgb(bool r, bool g, bool b, bool bright) {
+    WORD a = 0;
+    if (r) a |= FOREGROUND_RED;
+    if (g) a |= FOREGROUND_GREEN;
+    if (b) a |= FOREGROUND_BLUE;
+    if (bright) a |= FOREGROUND_INTENSITY;
+    return a;
+}
+
+void writeCenteredLine(const wstring& text, int cols, WORD attr, bool useAttr) {
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD written = 0;
+    int leftPad = 0;
+    if (cols > 0) leftPad = max(0, cols - (int)text.size()) / 2;
+    if (leftPad > 0) {
+        wstring spaces(leftPad, L' ');
+        WriteConsoleW(h, spaces.c_str(), (DWORD)spaces.size(), &written, nullptr);
+    }
+    if (useAttr) setColor(attr); else resetColor();
+    WriteConsoleW(h, text.c_str(), (DWORD)text.size(), &written, nullptr);
+    resetColor();
+    WriteConsoleW(h, L"\n", 1, &written, nullptr);
+}
+
+void drawCenteredUI(const Settings &s, bool running) {
+    vector<wstring> content;
+    content.push_back(L"insidingforfeds macro");
+    content.push_back(running ? L"[ RUNNING ]" : L"[ STOPPED ]");
+    content.push_back(utf8ToWide(string("bind: ") + formatBindString(s)));
+    {
+        wstring mode = utf8ToWide(modeToString(s.macroMode));
+        wstring act = utf8ToWide(activationToString(s.activationType));
+        wstring line = mode + L"  |  " + act;
+        if (s.autoEmote) line += L"  |  auto emote on";
+        content.push_back(line);
+    }
+    content.push_back(L"");
+    content.push_back(L"press your bind to start/stop");
+
+    size_t width = 0;
+    for (auto &l : content) width = max(width, l.size());
+    wstring top = L"+" + wstring(width + 2, L'-') + L"+";
+
+    ConsoleSize cs = getConsoleSize();
+    int totalLines = (int)content.size() + 2;
+    int topPad = 0;
+    if (cs.rows > 0) topPad = max(0, (int)cs.rows - totalLines) / 2;
+
+    clearConsole();
+    for (int i = 0; i < topPad; ++i) writeCenteredLine(L"", cs.cols, 0, false);
+
+    writeCenteredLine(top, cs.cols, 0, false);
+    for (size_t i = 0; i < content.size(); ++i) {
+        wstring line = L"| " + content[i] + wstring(width - content[i].size(), L' ') + L" |";
+        bool isStatus = (i == 1);
+        WORD attr = isStatus ? (running ? colorRgb(false, true, false, true) : colorRgb(true, false, false, true)) : 0;
+        writeCenteredLine(line, cs.cols, attr, isStatus);
+    }
+    writeCenteredLine(top, cs.cols, 0, false);
+}
+
+void drawCenteredPanel(const vector<string>& lines) {
+    vector<wstring> content;
+    content.reserve(lines.size());
+    for (auto &l : lines) content.push_back(utf8ToWide(l));
+
+    size_t width = 0;
+    for (auto &l : content) width = max(width, l.size());
+    wstring top = L"+" + wstring(width + 2, L'-') + L"+";
+
+    ConsoleSize cs = getConsoleSize();
+    int totalLines = (int)content.size() + 2;
+    int topPad = 0;
+    if (cs.rows > 0) topPad = max(0, (int)cs.rows - totalLines) / 2;
+
+    clearConsole();
+    for (int i = 0; i < topPad; ++i) writeCenteredLine(L"", cs.cols, 0, false);
+
+    writeCenteredLine(top, cs.cols, 0, false);
+    for (size_t i = 0; i < content.size(); ++i) {
+        wstring line = L"| " + content[i] + wstring(width - content[i].size(), L' ') + L" |";
+        bool isTitle = (i == 0);
+        WORD attr = isTitle ? colorRgb(false, true, true, true) : 0;
+        writeCenteredLine(line, cs.cols, attr, isTitle);
+    }
+    writeCenteredLine(top, cs.cols, 0, false);
+}
+
+void printCenteredPrompt(const string& prompt) {
+    ConsoleSize cs = getConsoleSize();
+    wstring wp = utf8ToWide(prompt);
+    int leftPad = 0;
+    if (cs.cols > 0) leftPad = max(0, (int)cs.cols - (int)wp.size()) / 2;
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD written = 0;
+    if (leftPad > 0) {
+        wstring spaces(leftPad, L' ');
+        WriteConsoleW(h, spaces.c_str(), (DWORD)spaces.size(), &written, nullptr);
+    }
+    WriteConsoleW(h, wp.c_str(), (DWORD)wp.size(), &written, nullptr);
+}
+
+static atomic<bool> g_holdRequest{false};
+
+void pressTap(WORD vk) {
+    sendScanDown(vk);
+    sleepMs(1);
+    sendScanUp(vk);
+}
+
+void runAutoEmoteThenEnable(int emoteNumber) {
+    const WORD VK_DOT = 0xBE;
+    int n = emoteNumber;
+    if (n < 1) n = 1;
+    if (n > 8) n = 8;
+    pressTap(VK_DOT);
+    sleepMs(50);
+    WORD vkNum = static_cast<WORD>(0x30 + n);
+    pressTap(vkNum);
+    sleepMs(40);
+}
+
+void setMacroEnabled(bool enabled) {
+    bool previous = macroEnabled.exchange(enabled);
+    if (statusEvent && previous != enabled) {
+        SetEvent(statusEvent);
+    }
+}
+
+struct MonitorState { ActivationType act; KeybindType type; int vk; MouseButton mb; bool autoEmote; int emoteNum; };
 static MonitorState g_monitorState;
 
 void startInputMonitor(const MonitorState &ms) {
@@ -406,14 +592,39 @@ void startInputMonitor(const MonitorState &ms) {
                     static bool pressed = false;
                     if ((wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) && p->vkCode == (DWORD)g_monitorState.vk) {
                         if (g_monitorState.act == ActivationType::Toggle) {
-                            if (!pressed) macroEnabled.store(!macroEnabled.load());
+                            if (!pressed) {
+                                bool cur = macroEnabled.load();
+                                if (!cur) {
+                                    if (g_monitorState.autoEmote) {
+                                        thread([]{
+                                            runAutoEmoteThenEnable(g_monitorState.emoteNum);
+                                            setMacroEnabled(true);
+                                        }).detach();
+                                    } else {
+                                        setMacroEnabled(true);
+                                    }
+                                } else {
+                                    setMacroEnabled(false);
+                                }
+                            }
                             pressed = true;
                         } else {
-                            macroEnabled.store(true);
-                            pressed = true;
+                            if (!pressed) {
+                                g_holdRequest.store(true);
+                                if (g_monitorState.autoEmote) {
+                                    thread([]{
+                                        runAutoEmoteThenEnable(g_monitorState.emoteNum);
+                                        if (g_holdRequest.load()) setMacroEnabled(true);
+                                    }).detach();
+                                } else {
+                                    setMacroEnabled(true);
+                                }
+                                pressed = true;
+                            }
                         }
                     } else if ((wParam == WM_KEYUP || wParam == WM_SYSKEYUP) && p->vkCode == (DWORD)g_monitorState.vk) {
-                        if (g_monitorState.act == ActivationType::Hold) macroEnabled.store(false);
+                        if (g_monitorState.act == ActivationType::Hold) setMacroEnabled(false);
+                        g_holdRequest.store(false);
                         pressed = false;
                     }
                 }
@@ -441,14 +652,39 @@ void startInputMonitor(const MonitorState &ms) {
                     if (match) {
                         if (isDown) {
                             if (g_monitorState.act == ActivationType::Toggle) {
-                                if (!pressed) macroEnabled.store(!macroEnabled.load());
+                                if (!pressed) {
+                                    bool cur = macroEnabled.load();
+                                    if (!cur) {
+                                        if (g_monitorState.autoEmote) {
+                                            thread([]{
+                                                runAutoEmoteThenEnable(g_monitorState.emoteNum);
+                                                setMacroEnabled(true);
+                                            }).detach();
+                                        } else {
+                                            setMacroEnabled(true);
+                                        }
+                                    } else {
+                                        setMacroEnabled(false);
+                                    }
+                                }
                                 pressed = true;
                             } else {
-                                macroEnabled.store(true);
-                                pressed = true;
+                                if (!pressed) {
+                                    g_holdRequest.store(true);
+                                    if (g_monitorState.autoEmote) {
+                                        thread([]{
+                                            runAutoEmoteThenEnable(g_monitorState.emoteNum);
+                                            if (g_holdRequest.load()) setMacroEnabled(true);
+                                        }).detach();
+                                    } else {
+                                        setMacroEnabled(true);
+                                    }
+                                    pressed = true;
+                                }
                             }
                         } else if (isUp) {
-                            if (g_monitorState.act == ActivationType::Hold) macroEnabled.store(false);
+                            if (g_monitorState.act == ActivationType::Hold) setMacroEnabled(false);
+                            g_holdRequest.store(false);
                             pressed = false;
                         }
                     }
@@ -470,6 +706,16 @@ int main() {
     SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
+    hideCursor();
+    statusEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    CONSOLE_SCREEN_BUFFER_INFO csbiInit{};
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbiInit)) {
+        g_defaultAttributes = csbiInit.wAttributes;
+    }
+
     vector<string> header = {
         "made by @insidingforfeds on dc,",
         "dm for source ;p",
@@ -478,9 +724,16 @@ int main() {
     printBox(header);
 
     Settings s{};
+    s.autoEmote = false;
+    s.emoteNumber = 1;
     bool haveConfig = loadConfig(s);
     if (haveConfig) {
-        cout << "Use last config? (y/n): ";
+        vector<string> lines = {
+            "setup",
+            "found saved settings"
+        };
+        drawCenteredPanel(lines);
+        printCenteredPrompt("Use last config? (y/n): ");
         string ans; getline(cin, ans);
         if (toLowerCopy(ans) == "y" || toLowerCopy(ans) == "yes") {
         } else {
@@ -489,45 +742,105 @@ int main() {
     }
 
     if (!haveConfig) {
-        cout << "Activation type (1=hold, 2=toggle): ";
-        string a; getline(cin, a); a = toLowerCopy(a);
-        if (a == "1" || a == "hold" || a == "hold key") s.activationType = ActivationType::Hold; else s.activationType = ActivationType::Toggle;
-
-        cout << "Macro mode (1=1st person, 2=3rd person): ";
-        string m; getline(cin, m); m = toLowerCopy(m);
-        if (m == "1" || m == "first" || m == "1st" || m == "one") s.macroMode = MacroMode::FirstPerson; else s.macroMode = MacroMode::ThirdPerson;
-
-        cout << "Press any key or mouse button to bind..." << endl;
-        Sleep(300);
-        InputBind b = captureNextBind();
-        s.keybindType = b.type;
-        if (b.type == KeybindType::Keyboard) { s.keyboardVk = b.vk; cout << "Captured VK: 0x" << hex << uppercase << s.keyboardVk << nouppercase << dec << endl; }
-        else { s.mouseButton = b.mb; cout << "Captured Mouse: " << mouseButtonToString(s.mouseButton) << endl; }
-
-        cout << "Save this config for next launch? (y/n): ";
-        string sv; getline(cin, sv);
-        if (toLowerCopy(sv) == "y" || toLowerCopy(sv) == "yes") saveConfig(s);
+        {
+            vector<string> lines = {
+                "setup",
+                "choose activation",
+                "1 = hold, 2 = toggle"
+            };
+            drawCenteredPanel(lines);
+            printCenteredPrompt("Activation type: ");
+            string a; getline(cin, a); a = toLowerCopy(a);
+            if (a == "1" || a == "hold" || a == "hold key") s.activationType = ActivationType::Hold; else s.activationType = ActivationType::Toggle;
+        }
+        {
+            vector<string> lines = {
+                "setup",
+                "choose mode",
+                "1 = 1st person, 2 = 3rd person"
+            };
+            drawCenteredPanel(lines);
+            printCenteredPrompt("Macro mode: ");
+            string m; getline(cin, m); m = toLowerCopy(m);
+            if (m == "1" || m == "first" || m == "1st" || m == "one") s.macroMode = MacroMode::FirstPerson; else s.macroMode = MacroMode::ThirdPerson;
+        }
+        {
+            vector<string> lines = {
+                "setup",
+                "bind a key or mouse button",
+                "press any key or mouse button now"
+            };
+            drawCenteredPanel(lines);
+            Sleep(300);
+            InputBind b = captureNextBind();
+            s.keybindType = b.type;
+            if (b.type == KeybindType::Keyboard) {
+                s.keyboardVk = b.vk;
+                vector<string> conf = { "setup", "input captured", (string)"VK 0x" + (static_cast<stringstream&&>(stringstream() << hex << uppercase << s.keyboardVk)).str() };
+                drawCenteredPanel(conf);
+            } else {
+                s.mouseButton = b.mb;
+                vector<string> conf = { "setup", "input captured", string("mouse ") + mouseButtonToString(s.mouseButton) };
+                drawCenteredPanel(conf);
+            }
+        }
+        {
+            vector<string> lines = {
+                "setup",
+                "auto emote",
+                "automatically emote so you don't have to do the process"
+            };
+            drawCenteredPanel(lines);
+            printCenteredPrompt("Enable auto emote? (y/n): ");
+            string ae; getline(cin, ae); ae = toLowerCopy(ae);
+            if (ae == "y" || ae == "yes") {
+                s.autoEmote = true;
+                while (true) {
+                    vector<string> lines2 = { "setup", "choose emote number", "1 - 8" };
+                    drawCenteredPanel(lines2);
+                    printCenteredPrompt("Emote number: ");
+                    string en; getline(cin, en);
+                    int n = 0;
+                    try { n = stoi(en); } catch (...) { n = 0; }
+                    if (n >= 1 && n <= 8) { s.emoteNumber = n; break; }
+                }
+            } else {
+                s.autoEmote = false;
+            }
+        }
+        {
+            vector<string> lines = { "setup", "save settings for next launch?" };
+            drawCenteredPanel(lines);
+            printCenteredPrompt("Save config? (y/n): ");
+            string sv; getline(cin, sv);
+            if (toLowerCopy(sv) == "y" || toLowerCopy(sv) == "yes") saveConfig(s);
+        }
     }
 
     thread worker;
     if (s.macroMode == MacroMode::FirstPerson) worker = thread(runFirstPersonLoop); else worker = thread(runThirdPersonLoop);
 
-    MonitorState ms{ s.activationType, s.keybindType, s.keyboardVk, s.mouseButton };
+    MonitorState ms{ s.activationType, s.keybindType, s.keyboardVk, s.mouseButton, s.autoEmote, s.emoteNumber };
     startInputMonitor(ms);
 
     bool last = macroEnabled.load();
     clearConsole();
-    cout << (last ? "macro running" : "macro stopped") << endl;
-    cout << "bind: " << (s.keybindType == KeybindType::Keyboard ? "VK 0x" : "mouse ") << (s.keybindType == KeybindType::Keyboard ? (static_cast<stringstream&&>(stringstream() << hex << uppercase << s.keyboardVk)).str() : mouseButtonToString(s.mouseButton)) << endl;
+    drawCenteredUI(s, last);
 
+    ConsoleSize lastSize = getConsoleSize();
     while (true) {
-        bool cur = macroEnabled.load();
-        if (cur != last) {
-            clearConsole();
-            cout << (cur ? "macro running" : "macro stopped") << endl;
-            last = cur;
+        DWORD waitRes = WaitForSingleObject(statusEvent, 500);
+        if (waitRes == WAIT_OBJECT_0) {
+            ResetEvent(statusEvent);
         }
-        sleepMs(16);
+        bool cur = macroEnabled.load();
+        ConsoleSize curSize = getConsoleSize();
+        bool sizeChanged = (curSize.cols != lastSize.cols || curSize.rows != lastSize.rows);
+        if (cur != last || sizeChanged) {
+            drawCenteredUI(s, cur);
+            last = cur;
+            lastSize = curSize;
+        }
     }
 
     stopThreads.store(true);
