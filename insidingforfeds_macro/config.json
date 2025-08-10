@@ -1,9 +1,0 @@
-{
-  "activation": "toggle",
-  "mode": "third",
-  "keybind_type": "mouse",
-  "keyboard_vk": 0,
-  "mouse_button": "x1",
-  "auto_emote": 0,
-  "emote_number": 1
-}

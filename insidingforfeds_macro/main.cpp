@@ -31,8 +31,8 @@ struct Settings {
 static atomic<bool> macroEnabled{false};
 static atomic<bool> stopThreads{false};
 
-static UINT wheelDeltaUnit = 120;
-static const int kFirstPersonStepDelayMs = 4;
+static UINT wheelDeltaUnit = WHEEL_DELTA;
+static const int kFirstPersonStepDelayMs = 12;
 static const int kThirdPersonKeyTapDelayMs = 10;
 
 string toLowerCopy(const string &s) {
@@ -309,6 +309,7 @@ void sendMouseWheel(int delta) {
 }
 
 void runFirstPersonLoop() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     while (!stopThreads.load()) {
         if (macroEnabled.load()) {
             sendMouseWheel(static_cast<int>(wheelDeltaUnit));
