@@ -29,7 +29,9 @@ struct Settings {
 static atomic<bool> macroEnabled{false};
 static atomic<bool> stopThreads{false};
 
-static UINT wheelDeltaUnit = 60;
+static UINT wheelDeltaUnit = 50;
+static const int kFirstPersonStepDelayMs = 10;
+static const int kThirdPersonKeyTapDelayMs = 5;
 
 string toLowerCopy(const string &s) {
     string r = s;
@@ -299,11 +301,11 @@ void runFirstPersonLoop() {
     while (!stopThreads.load()) {
         if (macroEnabled.load()) {
             sendMouseWheel(static_cast<int>(wheelDeltaUnit));
-            sleepMs(2);
+            sleepMs(kFirstPersonStepDelayMs);
             sendMouseWheel(-static_cast<int>(wheelDeltaUnit));
-            sleepMs(2);
+            sleepMs(kFirstPersonStepDelayMs);
         } else {
-            sleepMs(3);
+            sleepMs(kFirstPersonStepDelayMs);
         }
     }
 }
@@ -311,20 +313,51 @@ void runFirstPersonLoop() {
 void runThirdPersonLoop() {
     const WORD VK_I = 0x49;
     const WORD VK_O = 0x4F;
+    bool iDown = false;
+    bool oDown = false;
     while (!stopThreads.load()) {
         if (macroEnabled.load()) {
+            // hold i
             sendScanDown(VK_I);
-            sleepMs(4);
+            iDown = true;
+            sleepMs(kThirdPersonKeyTapDelayMs);
+            if (!macroEnabled.load()) {
+                if (iDown) { sendScanUp(VK_I); iDown = false; }
+                if (oDown) { sendScanUp(VK_O); oDown = false; }
+                continue;
+            }
+
+            // hold o
             sendScanDown(VK_O);
-            sleepMs(4);
+            oDown = true;
+            sleepMs(kThirdPersonKeyTapDelayMs);
+            if (!macroEnabled.load()) {
+                if (iDown) { sendScanUp(VK_I); iDown = false; }
+                if (oDown) { sendScanUp(VK_O); oDown = false; }
+                continue;
+            }
+
+            // release i
             sendScanUp(VK_I);
-            sleepMs(4);
+            iDown = false;
+            sleepMs(kThirdPersonKeyTapDelayMs);
+            if (!macroEnabled.load()) {
+                if (oDown) { sendScanUp(VK_O); oDown = false; }
+                continue;
+            }
+
+            // release o
             sendScanUp(VK_O);
-            sleepMs(4);
+            oDown = false;
+            sleepMs(kThirdPersonKeyTapDelayMs);
         } else {
-            sleepMs(5);
+            if (iDown) { sendScanUp(VK_I); iDown = false; }
+            if (oDown) { sendScanUp(VK_O); oDown = false; }
+            sleepMs(kThirdPersonKeyTapDelayMs);
         }
     }
+    if (iDown) sendScanUp(VK_I);
+    if (oDown) sendScanUp(VK_O);
 }
 
 string activationToString(ActivationType a) {
@@ -434,8 +467,8 @@ void startInputMonitor(const MonitorState &ms) {
 
 int main() {
     timeBeginPeriod(1);
-    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
     vector<string> header = {
         "made by @insidingforfeds on dc,",

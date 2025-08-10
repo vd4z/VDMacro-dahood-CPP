@@ -1,0 +1,7 @@
+{
+  "activation": "toggle",
+  "mode": "third",
+  "keybind_type": "mouse",
+  "keyboard_vk": 0,
+  "mouse_button": "x1"
+}
