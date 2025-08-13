@@ -32,12 +32,8 @@ simple macro for dahood. fast, low delay, low cpu. does first person and third p
 4) choose if you wanna save config for next time
 
 ### what it does
-- 3rd person: I down → 4ms → O down → 4ms → I up → 4ms → O up → 4ms, loop. uses scancodes so roblox picks it up better
-- 1st person: scroll up/down really tight timing with smaller wheel steps so it’s smooth and stable
-
-### tips
-- click roblox window first so it has focus or ur gonna fuck shit up
-- if 3rd person speed changes after an update, tiny timing tweaks (like 1–2ms) can help (dm me on discord)
+- 3rd person: I down → 4ms → O down → 4ms → I up → 4ms → O up → 4ms, loop.
+- 1st person: mouse scroll up → 5ms → mouse scroll down
 
 ### config
 - saves to `config.json` (same folder)
