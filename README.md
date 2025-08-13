@@ -4,6 +4,7 @@ simple macro for dahood. fast, low delay, low cpu. does first person and third p
 
 ### why this one
 - low latency, reacts quick
+- No FPS Loss Ingame when macro is active, maybe 10 FPS not more.
 - no bloat, small console app
 - bind anything (keys, x1/x2, mmb, lmb, rmb, F keys, alt keys)
 - can save your config so next time is 1 step
