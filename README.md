@@ -54,7 +54,9 @@ simple macro for dahood. fast, low delay, low cpu. does first person and third p
 - discord: `insidingforfeds`
 
 
-
+### if you're wondering
+- the code is badly formatted, confusing, basically unreadable for non-fluent c++ developers
+- why? so skids that don't know shit won't just skid vdmacro
 
 ## tags
 Da hood, macro, roblox, dahood, da hood macro
